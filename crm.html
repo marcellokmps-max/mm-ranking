@@ -8,6 +8,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -866,21 +867,9 @@ function goTo(page,btn) {
 function loadAll(){
   listenConvs(); listenContatos(); listenRRs(); listenLeads(); listenFUs(); listenTags(); listenAgends(); listenCamps();
   checkWA();
-  // Listener em tempo real para status do WhatsApp
-  db.collection('config').doc('whatsapp').onSnapshot(snap=>{
-    if(!snap.exists) return;
-    const d=snap.data();
-    const dot=document.getElementById('wa-dot'),txt=document.getElementById('wa-txt'),num=document.getElementById('wa-num');
-    if(!dot) return;
-    if(d.status==='open'){
-      dot.className='status-dot green';txt.textContent='Conectado ✓';
-      if(d.number) num.textContent='Número: '+d.number;
-      document.getElementById('qr-area').innerHTML='<div style="font-size:30px">✅</div><span style="font-size:11px;color:var(--green)">WhatsApp Conectado</span>';
-    } else if(d.qrcode){
-      dot.className='status-dot yellow';txt.textContent='Escaneie o QR Code';
-      document.getElementById('qr-area').innerHTML=`<img src="${d.qrcode}" style="width:160px;height:160px;border-radius:8px">`;
-    }
-  });
+  // Polling automático a cada 20s
+  if(_waCheckInterval) clearInterval(_waCheckInterval);
+  _waCheckInterval = setInterval(checkWA, 20000);
 }
 
 // ─── TAGS ─────────────────────────────────────────────────────────────────────
@@ -1520,62 +1509,66 @@ function updateDash(){
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
+let _waCheckInterval = null;
+
 async function checkWA(){
   const dot=document.getElementById('wa-dot'),txt=document.getElementById('wa-txt'),num=document.getElementById('wa-num');
   if(!dot) return;
   try {
-    // Lê status direto do Firebase — zero CORS!
-    const snap = await db.collection('config').doc('whatsapp').get();
-    if(!snap.exists){
-      dot.className='status-dot yellow';
-      txt.textContent='Aguardando backend...';
-      return;
-    }
-    const d = snap.data();
-    const state = d?.status || 'unknown';
-    if(state==='open'){
+    const r = await fetch('https://apis.mmsuplementoss.fun/whatsapp/2', {signal: AbortSignal.timeout(8000)});
+    const d = await r.json();
+
+    if(d.status === 'CONNECTED' || d.status === 'ONLINE' || d.status === 'connected'){
       dot.className='status-dot green';
       txt.textContent='Conectado ✓';
-      if(d.number) num.textContent='Número: '+d.number;
+      if(d.number || d.phoneNumber) num.textContent='Número: '+(d.number||d.phoneNumber);
       document.getElementById('qr-area').innerHTML='<div style="font-size:30px">✅</div><span style="font-size:11px;color:var(--green)">WhatsApp Conectado</span>';
-    } else if(state==='reconnecting'){
+      // Para o polling quando conectar
+      if(_waCheckInterval){ clearInterval(_waCheckInterval); _waCheckInterval=null; }
+    } else if(d.status === 'qrcode' && d.qrcode){
       dot.className='status-dot yellow';
-      txt.textContent='Reconectando...';
+      txt.textContent='Escaneie o QR Code';
+      num.textContent='Atualizando a cada 20s...';
+      renderQR(d.qrcode);
     } else {
       dot.className='status-dot yellow';
-      txt.textContent='Aguardando QR Code...';
-      if(d.qrcode){
-        document.getElementById('qr-area').innerHTML=`<img src="${d.qrcode}" style="width:160px;height:160px;border-radius:8px">`;
-      }
+      txt.textContent='Aguardando...';
     }
-    const upd = d.updatedAt ? new Date(d.updatedAt).toLocaleTimeString('pt-BR') : '';
-    if(num && state!=='open') num.textContent = upd ? 'Atualizado: '+upd : '–';
   } catch(e){
     const dot2=document.getElementById('wa-dot'),txt2=document.getElementById('wa-txt');
-    if(dot2){dot2.className='status-dot red';txt2.textContent='Backend offline';}
+    if(dot2){ dot2.className='status-dot red'; txt2.textContent='API offline'; }
+  }
+}
+
+function renderQR(qrString){
+  const area = document.getElementById('qr-area');
+  if(!area) return;
+  area.innerHTML = '';
+  const div = document.createElement('div');
+  div.id = 'qrcode-inner';
+  area.appendChild(div);
+  try {
+    new QRCode(div, {
+      text: qrString,
+      width: 160,
+      height: 160,
+      colorDark: '#000000',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.L
+    });
+  } catch(e){
+    area.innerHTML = '<span style="font-size:11px;color:var(--red)">Erro ao gerar QR</span>';
   }
 }
 async function reconnectWA(){
-  try{
-    // Sinaliza reconexão via Firebase — backend detecta e executa
-    await db.collection('config').doc('whatsapp').set({
-      status:'reconnecting', qrcode:null, updatedAt:new Date().toISOString()
-    });
-    document.getElementById('qr-area').innerHTML='<div style="font-size:30px;opacity:.4">📷</div><span style="font-size:11px">Gerando QR...</span>';
-    document.getElementById('wa-dot').className='status-dot yellow';
-    document.getElementById('wa-txt').textContent='Reconectando...';
-    toast('Reconexão solicitada! QR aparecerá em instantes.','success');
-    // Também tenta via backend diretamente (se CORS resolver no futuro)
-    fetch(`${BACKEND_URL}/force-reconnect`,{method:'POST'}).catch(()=>{});
-    // Polling do Firebase para pegar o QR
-    let attempts=0;
-    const poll=setInterval(async()=>{
-      attempts++;
-      await checkWA();
-      const snap=await db.collection('config').doc('whatsapp').get().catch(()=>null);
-      if(snap?.data()?.qrcode || snap?.data()?.status==='open' || attempts>15) clearInterval(poll);
-    },3000);
-  }catch(e){toast('Erro: '+e.message,'error');}
+  document.getElementById('qr-area').innerHTML='<div style="font-size:30px;opacity:.4">📷</div><span style="font-size:11px">Buscando QR...</span>';
+  document.getElementById('wa-dot').className='status-dot yellow';
+  document.getElementById('wa-txt').textContent='Buscando QR Code...';
+  await checkWA();
+  // Inicia polling automático a cada 20s
+  if(_waCheckInterval) clearInterval(_waCheckInterval);
+  _waCheckInterval = setInterval(checkWA, 20000);
+  toast('Buscando QR Code...', 'success');
 }
 function saveBackendUrl(){const v=document.getElementById('backend-url-inp').value.trim();if(!v)return;BACKEND_URL=v;localStorage.setItem('mm_backend_url',v);toast('URL salva!','success');}
 async function loadUsersConfig(){
