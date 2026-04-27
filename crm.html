@@ -868,8 +868,7 @@ function loadAll(){
   listenConvs(); listenContatos(); listenRRs(); listenLeads(); listenFUs(); listenTags(); listenAgends(); listenCamps();
   checkWA();
   // Polling automático a cada 20s
-  if(_waCheckInterval) clearInterval(_waCheckInterval);
-  _waCheckInterval = setInterval(checkWA, 20000);
+  setInterval(checkWA, 20000);
 }
 
 // ─── TAGS ─────────────────────────────────────────────────────────────────────
@@ -1509,37 +1508,39 @@ function updateDash(){
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-let _waCheckInterval = null;
+
 
 async function checkWA(){
-  const dot=document.getElementById('wa-dot'),txt=document.getElementById('wa-txt'),num=document.getElementById('wa-num');
-  if(!dot) return;
   try {
-    const r = await fetch('https://apis.mmsuplementoss.fun/whatsapp/2', {signal: AbortSignal.timeout(8000)});
-    const d = await r.json();
-
-    if(d.status === 'CONNECTED' || d.status === 'ONLINE' || d.status === 'connected'){
-      dot.className='status-dot green';
-      txt.textContent='Conectado ✓';
-      if(d.number || d.phoneNumber) num.textContent='Número: '+(d.number||d.phoneNumber);
-      document.getElementById('qr-area').innerHTML='<div style="font-size:30px">✅</div><span style="font-size:11px;color:var(--green)">WhatsApp Conectado</span>';
-      // Para o polling quando conectar
-      if(_waCheckInterval){ clearInterval(_waCheckInterval); _waCheckInterval=null; }
+    const res = await fetch('https://apis.mmsuplementoss.fun/whatsapp/2');
+    const d = await res.json();
+    console.log('WA API:', d);
+    const dot = document.getElementById('wa-dot');
+    const txt = document.getElementById('wa-txt');
+    const num = document.getElementById('wa-num');
+    if(d.status === 'open'){
+      if(dot) dot.className='status-dot green';
+      if(txt) txt.textContent='Conectado';
+      if(num) num.textContent='';
+      const qrArea = document.getElementById('qr-area');
+      if(qrArea) qrArea.innerHTML = '';
     } else if(d.status === 'qrcode' && d.qrcode){
-      dot.className='status-dot yellow';
-      txt.textContent='Escaneie o QR Code';
-      num.textContent='Atualizando a cada 20s...';
+      if(dot) dot.className='status-dot yellow';
+      if(txt) txt.textContent='Escaneie o QR Code';
+      if(num) num.textContent='Atualizando automaticamente...';
       renderQR(d.qrcode);
     } else {
-      dot.className='status-dot yellow';
-      txt.textContent='Aguardando...';
+      if(dot) dot.className='status-dot yellow';
+      if(txt) txt.textContent='Aguardando QR...';
     }
   } catch(e){
-    const dot2=document.getElementById('wa-dot'),txt2=document.getElementById('wa-txt');
-    if(dot2){ dot2.className='status-dot red'; txt2.textContent='API offline'; }
+    console.error(e);
+    const dot = document.getElementById('wa-dot');
+    const txt = document.getElementById('wa-txt');
+    if(dot) dot.className='status-dot red';
+    if(txt) txt.textContent='Erro ao conectar API';
   }
 }
-
 function renderQR(qrString){
   const area = document.getElementById('qr-area');
   if(!area) return;
@@ -1566,8 +1567,7 @@ async function reconnectWA(){
   document.getElementById('wa-txt').textContent='Buscando QR Code...';
   await checkWA();
   // Inicia polling automático a cada 20s
-  if(_waCheckInterval) clearInterval(_waCheckInterval);
-  _waCheckInterval = setInterval(checkWA, 20000);
+  setInterval(checkWA, 20000);
   toast('Buscando QR Code...', 'success');
 }
 function saveBackendUrl(){const v=document.getElementById('backend-url-inp').value.trim();if(!v)return;BACKEND_URL=v;localStorage.setItem('mm_backend_url',v);toast('URL salva!','success');}
